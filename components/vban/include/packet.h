@@ -21,7 +21,7 @@
 
 #include <stddef.h>
 #include "vban.h"
-//#include "stream.h"
+#include "stream.h"
 
 /**
  * Check packet content and only return valid return value if this is an audio pcm packet
@@ -73,3 +73,4 @@ int packet_init_header(char* buffer, struct stream_config_t const* stream_config
 int packet_set_new_content(char* buffer, size_t payload_size);
 
 #endif /*__PACKET_H__*/
+

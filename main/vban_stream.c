@@ -46,120 +46,67 @@
 
 #include "i2s_stream.h"
 #include "vban_stream.h"
+#include "socket.h"
 
 static const char *TAG = "VBAN_STREAM";
 
+struct stream_info_t
+{
+    VBanCodec               codec;
+    unsigned int            channels;
+    unsigned int            rates;
+    unsigned int            bits;
+};
+
 typedef struct vban_stream {
-    audio_stream_type_t type;
-#ifdef CONFIG_EXAMPLE_IPV4
-    struct sockaddr_in destAddr;
-#else // IPV6
-    struct sockaddr_in6 destAddr;
-#endif
-    int sock;
-    bool is_init;
+    audio_stream_type_t         type;
+    socket_handle_t             socket;
+    char                        buffer[VBAN_PROTOCOL_MAX_SIZE];
+    struct socket_config_t      socket_cfg;
+    char                        stream_name[VBAN_STREAM_NAME_SIZE];
+    bool                        is_init;
+    struct stream_info_t        stream_info;
 } vban_stream_t;
 
-static int packet_pcm_check(char const* buffer, size_t size)
-{
-    /** the packet is already a valid vban packet and buffer already checked before */
-
-    struct VBanHeader const* const hdr = PACKET_HEADER_PTR(buffer);
-    // enum VBanBitResolution const bit_resolution = (VBanBitResolution)(hdr->format_bit & VBAN_BIT_RESOLUTION_MASK);
-    const VBanBitResolution bit_resolution = (VBanBitResolution)(hdr->format_bit & VBAN_BIT_RESOLUTION_MASK);
-    int const sample_rate   = hdr->format_SR & VBAN_SR_MASK;
-    int const nb_samples    = hdr->format_nbs + 1;
-    int const nb_channels   = hdr->format_nbc + 1;
-    size_t sample_size      = 0;
-    size_t payload_size     = 0;
-
-    // ESP_LOGI(TAG, "%s: packet is vban: %u, sr: %d, nbs: %d, nbc: %d, bit: %d, name: %s, nu: %u",
-    //    __func__, hdr->vban, hdr->format_SR, hdr->format_nbs, hdr->format_nbc, hdr->format_bit, hdr->streamname, hdr->nuFrame);
-
-    if (bit_resolution >= VBAN_BIT_RESOLUTION_MAX)
-    {
-        ESP_LOGE(TAG, "invalid bit resolution");
-        return -EINVAL;
-    }
-
-    if (sample_rate >= VBAN_SR_MAXNUMBER)
-    {
-        ESP_LOGE(TAG, "invalid sample rate");
-        return -EINVAL;
-    }
-
-    sample_size = VBanBitResolutionSize[bit_resolution];
-    payload_size = nb_samples * sample_size * nb_channels;
-
-    if (payload_size != (size - VBAN_HEADER_SIZE))
-    {
-        ESP_LOGE(TAG, "invalid payload size");
-        return -EINVAL;
-    }
-
-    return 0;
-}
-
-static int vban_packet_check(char const* streamname, char const* buffer, size_t size)
+int check_info(char const* streamname, char const* buffer, struct stream_info_t* info)
 {
     struct VBanHeader const* const hdr = PACKET_HEADER_PTR(buffer);
-    // enum VBanProtocol protocol = VBAN_PROTOCOL_UNDEFINED_4;
-    // enum VBanCodec codec = (VBanCodec)VBAN_BIT_RESOLUTION_MAX;
-    VBanProtocol protocol = VBAN_PROTOCOL_UNDEFINED_4;
-    VBanCodec codec = (VBanCodec)VBAN_BIT_RESOLUTION_MAX;
 
     if ((streamname == 0) || (buffer == 0))
     {
-        ESP_LOGE(TAG, "null pointer argument");
-        return -EINVAL;
-    }
-
-    if (size <= VBAN_HEADER_SIZE)
-    {
-        ESP_LOGE(TAG, "packet too small");
+        ESP_LOGE(TAG, "%s: null pointer argument", __func__);
         return -EINVAL;
     }
 
     if (hdr->vban != VBAN_HEADER_FOURC)
     {
-        ESP_LOGE(TAG, "invalid vban magic fourc");
+        ESP_LOGE(TAG, "%s: invalid vban magic fourc", __func__);
         return -EINVAL;
     }
 
     if (strncmp(streamname, hdr->streamname, VBAN_STREAM_NAME_SIZE))
     {
-        ESP_LOGE(TAG, "different streamname");
+        ESP_LOGE(TAG, "%s: different streamname", __func__);
         return -EINVAL;
     }
 
-    /** check the reserved bit : it must be 0 */
-    if (hdr->format_bit & VBAN_RESERVED_MASK)
-    {
-        ESP_LOGE(TAG, "reserved format bit invalid value");
-        return -EINVAL;
+    VBanCodec codec = hdr->format_bit & VBAN_CODEC_MASK;
+    unsigned int nb_channels = hdr->format_nbc + 1;
+    unsigned int sample_rate = VBanSRList[hdr->format_SR & VBAN_SR_MASK];
+    unsigned int bit_fmt = stream_int_bit_fmt(hdr->format_bit & VBAN_BIT_RESOLUTION_MASK);
+    if (info->codec != codec) {
+        info->codec = codec;
+        info->channels = nb_channels;
+        info->rates = sample_rate;
+        info->bits = bit_fmt;
+        return 1;
+    } else if (info->channels != nb_channels || info->rates != sample_rate || info->bits != bit_fmt) {
+        info->channels = nb_channels;
+        info->rates = sample_rate;
+        info->bits = bit_fmt;
+        return 2;
     }
 
-    /** check protocol and codec */
-    protocol        = (VBanProtocol)(hdr->format_SR & VBAN_PROTOCOL_MASK);
-    codec           = (VBanCodec)(hdr->format_bit & VBAN_CODEC_MASK);
-
-    switch (protocol)
-    {
-        case VBAN_PROTOCOL_AUDIO:
-            return (codec == VBAN_CODEC_PCM) ? packet_pcm_check(buffer, size) : -EINVAL;
-        case VBAN_PROTOCOL_SERIAL:
-        case VBAN_PROTOCOL_TXT:
-        case VBAN_PROTOCOL_UNDEFINED_1:
-        case VBAN_PROTOCOL_UNDEFINED_2:
-        case VBAN_PROTOCOL_UNDEFINED_3:
-        case VBAN_PROTOCOL_UNDEFINED_4:
-            /** not supported yet */
-            return -EINVAL;
-
-        default:
-            ESP_LOGI(TAG, "packet with unknown protocol");
-            return -EINVAL;
-    }
     return 0;
 }
 
@@ -215,73 +162,13 @@ static esp_err_t _vban_open(audio_element_handle_t self)
 
     ESP_LOGI(TAG, "_vban_open, ip:%s, port=%d", addr, (int)port_num);
 
-    char addr_str[128];
-    int addr_family;
-    int ip_protocol;
-
-    if (vban->type == AUDIO_STREAM_READER) {
-#ifdef CONFIG_EXAMPLE_IPV4
-        struct sockaddr_in destAddr;
-        destAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-        destAddr.sin_family = AF_INET;
-        destAddr.sin_port = htons((int)port_num);
-        addr_family = AF_INET;
-        ip_protocol = IPPROTO_IP;
-        inet_ntoa_r(destAddr.sin_addr, addr_str, sizeof(addr_str) - 1);
-#else // IPV6
-        struct sockaddr_in6 destAddr;
-        bzero(&destAddr.sin6_addr.un, sizeof(destAddr.sin6_addr.un));
-        destAddr.sin6_family = AF_INET6;
-        destAddr.sin6_port = htons((int)port_num);
-        addr_family = AF_INET6;
-        ip_protocol = IPPROTO_IPV6;
-        inet6_ntoa_r(destAddr.sin6_addr, addr_str, sizeof(addr_str) - 1);
-#endif
-        vban->destAddr = destAddr;
-        vban->sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
-        if (vban->sock < 0) {
-            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-            return ESP_FAIL;
-        }
-        ESP_LOGI(TAG, "Socket created");
-
-        int err = bind(vban->sock, (struct sockaddr *)&destAddr, sizeof(destAddr));
-        if (err < 0) {
-            ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
-        }
-        ESP_LOGI(TAG, "Socket binded");
-    } else if (vban->type == AUDIO_STREAM_WRITER) {
-#ifdef CONFIG_EXAMPLE_IPV4
-        struct sockaddr_in destAddr;
-        destAddr.sin_addr.s_addr = inet_addr(addr);
-        destAddr.sin_family = AF_INET;
-        destAddr.sin_port = htons((int)port_num);
-        addr_family = AF_INET;
-        ip_protocol = IPPROTO_IP;
-        inet_ntoa_r(destAddr.sin_addr, addr_str, sizeof(addr_str) - 1);
-#else // IPV6
-        struct sockaddr_in6 destAddr;
-        inet6_aton(addr, &destAddr.sin6_addr);
-        destAddr.sin6_family = AF_INET6;
-        destAddr.sin6_port = htons((int)port_num);
-        addr_family = AF_INET6;
-        ip_protocol = IPPROTO_IPV6;
-        inet6_ntoa_r(destAddr.sin6_addr, addr_str, sizeof(addr_str) - 1);
-#endif
-        vban->destAddr = destAddr;
-        vban->sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
-        if (vban->sock < 0) {
-            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-            return ESP_FAIL;
-        }
-        ESP_LOGI(TAG, "Socket created");
-    } else {
-        ESP_LOGE(TAG, "vban must be sender or receiver");
-        return ESP_FAIL;
-    }
-
-    if (vban->sock < 0) {
-        ESP_LOGE(TAG, "Failed to open vban sock");
+    strncpy(vban->socket_cfg.ip_address, addr, SOCKET_IP_ADDRESS_SIZE-1);
+    vban->socket_cfg.port = (int)port_num;
+    vban->socket_cfg.direction = vban->type == AUDIO_STREAM_READER ? SOCKET_IN : SOCKET_OUT;
+    strncpy(vban->stream_name, "esp32", VBAN_STREAM_NAME_SIZE-1);
+    int ret = socket_init(&(vban->socket), &(vban->socket_cfg));
+    if (ret != 0) {
+        ESP_LOGE(TAG, "Failed to open vban socket");
         return ESP_FAIL;
     }
 
@@ -294,48 +181,60 @@ static int _vban_read(audio_element_handle_t self, char *buffer, int len, TickTy
     vban_stream_t *vban = (vban_stream_t *)audio_element_getdata(self);
     audio_element_info_t info;
     audio_element_getinfo(self, &info);
-    char rx_buffer[VBAN_PROTOCOL_MAX_SIZE];
+    ESP_LOGD(TAG, "read len=%d, pos=%d/%d", len, (int)info.byte_pos, (int)info.total_bytes);
+
     int payload_size = 0;
+    struct stream_config_t stream_config;
+    int size = socket_read(vban->socket, vban->buffer, VBAN_PROTOCOL_MAX_SIZE);
+    if (size < 0) {
+        ESP_LOGE(TAG, "socket_read failed: errno %d", errno);
+        return 0;
+    }
 
-    // ESP_LOGI(TAG, "read len=%d, pos=%d/%d", len, (int)info.byte_pos, (int)info.total_bytes);
-
-    // ESP_LOGI(TAG, "Waiting for data, %d", ticks_to_wait);
-    struct sockaddr_in6 sourceAddr; // Large enough for both IPv4 or IPv6
-    socklen_t socklen = sizeof(sourceAddr);
-    len = recvfrom(vban->sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&sourceAddr, &socklen);
-
-    // Error occured during receiving
-    if (len < 0) {
-        ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+    int ret = check_info(vban->stream_name, vban->buffer, &(vban->stream_info));
+    if (ret < 0) {
+        ESP_LOGE(TAG, "socket read invalid stream");
         return 0;
     } else {
-        // Data received
-        // Get the sender's ip address as string
-        char addr_str[128];
-        if (sourceAddr.sin6_family == PF_INET) {
-            inet_ntoa_r(((struct sockaddr_in *)&sourceAddr)->sin_addr.s_addr, addr_str, sizeof(addr_str) - 1);
-        } else if (sourceAddr.sin6_family == PF_INET6) {
-            inet6_ntoa_r(sourceAddr.sin6_addr, addr_str, sizeof(addr_str) - 1);
-        }
+        bool report = false;
+        payload_size = PACKET_PAYLOAD_SIZE(size);
 
-        rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string...
-        // ESP_LOGI(TAG, "Received %d bytes from %s:", len, addr_str);
-
-        if (vban_packet_check("esp32", rx_buffer, len) == 0)
-        {
-            //copy the received data to i2s buffer
-            payload_size = PACKET_PAYLOAD_SIZE(len);//(len - VBAN_HEADER_SIZE);
-            memcpy(buffer, (rx_buffer) + VBAN_HEADER_SIZE, payload_size);
-
-            struct VBanHeader const* const hdr = PACKET_HEADER_PTR(rx_buffer);
-            info.byte_pos += payload_size;
-            info.sample_rates = (int)VBanSRList[hdr->format_SR & VBAN_SR_MASK];
-            info.channels = hdr->format_nbc + 1;
-            info.bits = 16;
+        info.byte_pos += payload_size;
+        if (ret > 0) {
+            info.sample_rates = vban->stream_info.rates;
+            info.channels = vban->stream_info.channels;
+            info.bits = vban->stream_info.bits;
+            if (ret == 1 && vban->stream_info.codec != VBAN_CODEC_PCM) {
+                info.reserve_data.user_data_0 = VBAN_CODEC_OPUS;
+            }
+            report = true;
             audio_element_setinfo(self, &info);
-            // audio_element_report_info(self);
         }
+
+        if (report) {
+            audio_element_report_info(self);
+        }
+
+        //copy the received data to buffer
+        memcpy(buffer, PACKET_PAYLOAD_PTR(vban->buffer), payload_size);
     }
+    // if (packet_check(vban->stream_name, vban->buffer, size) == 0) {
+    //     packet_get_stream_config(vban->buffer, &stream_config);
+
+    //     info.byte_pos += payload_size;
+    //     info.sample_rates = stream_config.sample_rate;
+    //     info.channels = stream_config.nb_channels;
+    //     info.bits = stream_int_bit_fmt(stream_config.bit_fmt);
+    //     audio_element_setinfo(self, &info);
+    //     if (!vban->info_report) {
+    //         audio_element_report_info(self);
+    //         vban->info_report = true;
+    //     }
+
+    //     //copy the received data to i2s buffer
+    //     payload_size = PACKET_PAYLOAD_SIZE(size);
+    //     memcpy(buffer, PACKET_PAYLOAD_PTR(vban->buffer), payload_size);
+    // }
     return payload_size;
 }
 
@@ -344,13 +243,30 @@ static int _vban_write(audio_element_handle_t self, char *buffer, int len, TickT
     vban_stream_t *vban = (vban_stream_t *)audio_element_getdata(self);
     audio_element_info_t info;
     audio_element_getinfo(self, &info);
-    //TODO: create vban packet with the data(buffer).
-    int wlen = sendto(vban->sock, buffer, strlen(buffer), 0, (struct sockaddr *)&(vban->destAddr), sizeof(vban->destAddr));
-    if (wlen < 0) {
-        ESP_LOGE(TAG, "Error occured during sending: errno %d", errno);
-        return 0;
+
+    struct stream_config_t stream_config;
+    stream_config.sample_rate = info.sample_rates;
+    stream_config.nb_channels = info.channels;
+    stream_config.bit_fmt = info.bits;
+
+    packet_init_header(vban->buffer, &stream_config, vban->stream_name);
+    int max_size = packet_get_max_payload_size(vban->buffer);
+    if (len > max_size) {
+        len = max_size;
     }
-    // ESP_LOGI(TAG, "write,%d, errno:%d,pos:%d", wlen, errno, (int)info.byte_pos);
+
+    memcpy(PACKET_PAYLOAD_PTR(vban->buffer), buffer, len);
+    packet_set_new_content(vban->buffer, len);
+    int packet_size = len + sizeof(struct VBanHeader);
+    int wlen = 0;
+    if (packet_check(vban->stream_name, vban->buffer, packet_size) == 0) {
+        wlen = socket_write(vban->socket, vban->buffer, packet_size);
+        if (wlen < 0) {
+            ESP_LOGE(TAG, "socket_write failed: errno %d", errno);
+        }
+    }
+
+    ESP_LOGD(TAG, "write,%d, errno:%d,pos:%d", wlen, errno, (int)info.byte_pos);
     if (wlen > 0) {
         info.byte_pos += wlen;
         audio_element_setinfo(self, &info);
@@ -360,8 +276,6 @@ static int _vban_write(audio_element_handle_t self, char *buffer, int len, TickT
 
 static int _vban_process(audio_element_handle_t self, char *in_buffer, int in_len)
 {
-    // ESP_LOGW(TAG, "_vban_process ,%d", in_len);
-    // vTaskDelay(3/portTICK_PERIOD_MS);
     int r_size = audio_element_input(self, in_buffer, in_len);
     int w_size = 0;
     if (r_size > 0) {
@@ -392,10 +306,8 @@ static esp_err_t _vban_close(audio_element_handle_t self)
 static esp_err_t _vban_destroy(audio_element_handle_t self)
 {
     vban_stream_t *vban = (vban_stream_t *)audio_element_getdata(self);
-    if (vban->sock != -1) {
-        shutdown(vban->sock, 0);
-        close(vban->sock);
-    }
+
+    socket_release(&(vban->socket));
     audio_free(vban);
     return ESP_OK;
 }

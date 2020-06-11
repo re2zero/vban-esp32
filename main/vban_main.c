@@ -41,13 +41,6 @@
 
 #include "vban_stream.h"
 
-#define VBAN_BIT_RESOLUTION_MAX 2
-#define EINVAL 22
-
-// buffers for receiving and sending data
-int VBANBuffer[VBAN_PROTOCOL_MAX_SIZE];
-
-
 /* The examples use simple WiFi configuration that you can set via
    'make menuconfig'.
    If you'd rather not, just change the below entries to strings with
@@ -64,7 +57,7 @@ static EventGroupHandle_t wifi_event_group;
 const int IPV4_GOTIP_BIT = BIT0;
 const int IPV6_GOTIP_BIT = BIT1;
 
-static const char *TAG = "vban_receptor";
+static const char *TAG = "vban_deamon";
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -170,7 +163,8 @@ void app_main()
     audio_pipeline_link(pipeline, (const char *[]) {"vban", "i2s"}, 2);
 
     ESP_LOGI(TAG, "[3.3] Set up  uri (and default output is i2s)");
-    audio_element_set_uri(vban_stream_reader, "0.0.0.0:6980");
+    // audio_element_set_uri(vban_stream_reader, "0.0.0.0:6980");
+    audio_element_set_uri(vban_stream_reader, "192.168.20.126:6980");
 
     ESP_LOGI(TAG, "[ 4 ] Initialize peripherals");
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
@@ -220,8 +214,11 @@ void app_main()
             audio_element_info_t music_info = {0};
             audio_element_getinfo(vban_stream_reader, &music_info);
 
-            // ESP_LOGI(TAG, "[ * ] Receive music info from VBan, sample_rates=%d, bits=%d, ch=%d",
-            //          music_info.sample_rates, music_info.bits, music_info.channels);
+            ESP_LOGI(TAG, "[ * ] Receive music info from VBan, sample_rates=%d, bits=%d, ch=%d, codec=%d",
+                     music_info.sample_rates, music_info.bits, music_info.channels, music_info.reserve_data.user_data_0);
+            if (music_info.reserve_data.user_data_0 == VBAN_CODEC_OPUS) {
+                ESP_LOGI(TAG, "[ * ] Should use the opus decoder!! TODO");
+            }
 
             audio_element_setinfo(i2s_stream_writer, &music_info);
             i2s_stream_set_clk(i2s_stream_writer, music_info.sample_rates, music_info.bits, music_info.channels);

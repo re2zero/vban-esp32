@@ -1,0 +1,10 @@
+.config
+
+# vscode setting
+.vscode
+
+# genrate build files
+sdkconfig
+sdkconfig.old
+build
+

@@ -89,7 +89,7 @@ typedef enum
     VBAN_CODEC_PCM              =   0x00,
     VBAN_CODEC_VBCA             =   0x10,
     VBAN_CODEC_VBCV             =   0x20,
-    VBAN_CODEC_UNDEFINED_3      =   0x30,
+    VBAN_CODEC_OPUS             =   0x30,
     VBAN_CODEC_UNDEFINED_4      =   0x40,
     VBAN_CODEC_UNDEFINED_5      =   0x50,
     VBAN_CODEC_UNDEFINED_6      =   0x60,
