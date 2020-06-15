@@ -32,6 +32,17 @@ enum socket_direction
     SOCKET_OUT,
 };
 
+/**
+ * Socket multicast configuration structure.
+ * IPv4 or IPv6 only for simple using.
+ */
+struct socket_multicast_t
+{
+    short     ttl;
+    short     default_if;
+    short     loopback;
+    char      multicast_address[SOCKET_IP_ADDRESS_SIZE];
+};
 
 /**
  * Socket configuration structure.
@@ -42,6 +53,7 @@ struct socket_config_t
     enum socket_direction   direction;
     char                    ip_address[SOCKET_IP_ADDRESS_SIZE];
     short                   port;
+    struct socket_multicast_t mc_cfg;
 };
 
 /**
@@ -64,6 +76,22 @@ int socket_init(socket_handle_t* handle, struct socket_config_t const* config);
  * @return 0 upon success, negative value otherwise
  */
 int socket_release(socket_handle_t* handle);
+
+/**
+ * Join a multicast group
+ * @param handle object handle
+ * @param multiaddr multicast ip address
+ * @return 0 upon success, negative value otherwise
+ */
+int socket_join_group(socket_handle_t* handle, const char* multiaddr);
+
+/**
+ * Leave a multicast group
+ * @param handle object handle
+ * @param multiaddr multicast ip address
+ * @return 0 upon success, negative value otherwise
+ */
+int socket_leave_group(socket_handle_t* handle, const char* multiaddr);
 
 /**
  * Read data from the socket
