@@ -38,8 +38,9 @@
 
 struct socket_t
 {
-    struct socket_config_t  config;
-    int                     fd;
+    struct socket_config_t    config;
+    struct socket_multicast_t mcast_cfg;
+    int                       fd;
 };
 
 #define MULTICAST_LOOPBACK CONFIG_EXAMPLE_LOOPBACK
@@ -58,11 +59,12 @@ static int socket_open(socket_handle_t handle);
 static int socket_close(socket_handle_t handle);
 static int socket_is_multi_address(char const* ip);
 
-static int socket_add_ipv4_multicast_group(int sock, char* multi_ipv4, bool assign_source_if);
+static int socket_add_ipv4_multicast_group(int sock, uint8_t dif, char* multi_ipv4, bool assign_source_if);
 static int create_socket(bool socket_in, int port);
-static int join_multi_group(int sock, char* multi_ipv4);
-static int leave_multi_group(int sock, char* multi_ipv4);
+static int join_multi_group(socket_handle_t handle);
+static int leave_multi_group(socket_handle_t handle);
 
+// #define CONFIG_SOCKET_IPV6
 
 #ifdef CONFIG_SOCKET_IPV6
 int create_socket(bool socket_in, int port)
@@ -101,30 +103,31 @@ err:
     return -1;
 }
 
-int join_multi_group(int sock, char* multi_ipv6, char* multi_ipv4)
+int join_multi_group(socket_handle_t handle)
 {
     struct in6_addr if_inaddr = { 0 };
     struct ip6_addr if_ipaddr = { 0 };
     struct ip6_mreq v6imreq = { 0 };
     int err = 0;
+    int sock = handle->fd;
     
     // Selct the interface to use as multicast source for this socket.
-#if USE_DEFAULT_IF
-    bzero(&if_inaddr.un, sizeof(if_inaddr.un));
-#else
-    // Read interface adapter link-local address and use it
-    // to bind the multicast IF to this socket.
-    //
-    // (Note the interface may have other non-LL IPV6 addresses as well,
-    // but it doesn't matter in this context as the address is only
-    // used to identify the interface.)
-    err = tcpip_adapter_get_ip6_linklocal(TCPIP_ADAPTER_IF_STA, &if_ipaddr);
-    inet6_addr_from_ip6addr(&if_inaddr, &if_ipaddr);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get IPV6 LL address. Error 0x%x", err);
-        goto err;
+    if (handle->mcast_cfg.default_if) {
+        bzero(&if_inaddr.un, sizeof(if_inaddr.un));
+    } else {
+        // Read interface adapter link-local address and use it
+        // to bind the multicast IF to this socket.
+        //
+        // (Note the interface may have other non-LL IPV6 addresses as well,
+        // but it doesn't matter in this context as the address is only
+        // used to identify the interface.)
+        err = tcpip_adapter_get_ip6_linklocal(TCPIP_ADAPTER_IF_STA, &if_ipaddr);
+        inet6_addr_from_ip6addr(&if_inaddr, &if_ipaddr);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get IPV6 LL address. Error 0x%x", err);
+            goto err;
+        }
     }
-#endif
 
     // Assign the multicast source interface, via its IP
     err = setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_IF, &if_inaddr,
@@ -142,39 +145,39 @@ int join_multi_group(int sock, char* multi_ipv6, char* multi_ipv4)
         goto err;
     }
 
-#if MULTICAST_LOOPBACK
-    // select whether multicast traffic should be received by this device, too
-    // (if setsockopt() is not called, the default is no)
-    uint8_t loopback_val = MULTICAST_LOOPBACK;
-    err = setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
-                     &loopback_val, sizeof(uint8_t));
-    if (err < 0) {
-        ESP_LOGE(TAG, "Failed to set IPV6_MULTICAST_LOOP. Error %d", errno);
-        goto err;
+    if (handle->mcast_cfg.loopback) {
+        // select whether multicast traffic should be received by this device, too
+        // (if setsockopt() is not called, the default is no)
+        uint8_t loopback_val = handle->mcast_cfg.loopback;
+        err = setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
+                        &loopback_val, sizeof(uint8_t));
+        if (err < 0) {
+            ESP_LOGE(TAG, "Failed to set IPV6_MULTICAST_LOOP. Error %d", errno);
+            goto err;
+        }
     }
-#endif
 
     // this is also a listening socket, so add it to the multicast
     // group for listening...
 
     // Configure source interface
-#if USE_DEFAULT_IF
-    v6imreq.imr_interface.s_addr = IPADDR_ANY;
-#else
-    inet6_addr_from_ip6addr(&v6imreq.ipv6mr_interface, &if_ipaddr);
-#endif
+    if (handle->mcast_cfg.default_if) {
+        v6imreq.imr_interface.s_addr = IPADDR_ANY;
+    } else {
+        inet6_addr_from_ip6addr(&v6imreq.ipv6mr_interface, &if_ipaddr);
+    }
 
     // Configure multicast address to listen to
-    err = inet6_aton(multi_ipv6, &v6imreq.ipv6mr_multiaddr);
+    err = inet6_aton(handle->mcast_cfg.multicast_address, &v6imreq.ipv6mr_multiaddr);
     if (err != 1) {
-        ESP_LOGE(TAG, "Configured IPV6 multicast address '%s' is invalid.", multi_ipv6);
+        ESP_LOGE(TAG, "Configured IPV6 multicast address '%s' is invalid.", handle->mcast_cfg.multicast_address);
         goto err;
     }
     ESP_LOGI(TAG, "Configured IPV6 Multicast address %s", inet6_ntoa(v6imreq.ipv6mr_multiaddr));
     ip6_addr_t multi_addr;
     inet6_addr_to_ip6addr(&multi_addr, &v6imreq.ipv6mr_multiaddr);
     if (!ip6_addr_ismulticast(&multi_addr)) {
-        ESP_LOGW(TAG, "Configured IPV6 multicast address '%s' is not a valid multicast address. This will probably not work.", multi_ipv6);
+        ESP_LOGW(TAG, "Configured IPV6 multicast address '%s' is not a valid multicast address. This will probably not work.", handle->mcast_cfg.multicast_address);
     }
 
     err = setsockopt(sock, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP,
@@ -186,7 +189,7 @@ int join_multi_group(int sock, char* multi_ipv6, char* multi_ipv4)
 
 #if CONFIG_SOCKET_IPV4_V6
     // Add the common IPV4 config options
-    err = socket_add_ipv4_multicast_group(sock, multi_ipv4, false);
+    err = socket_add_ipv4_multicast_group(sock, handle->mcast_cfg.default_if, handle->mcast_cfg.multicast_address, false);
     if (err < 0) {
         goto err;
     }
@@ -210,35 +213,36 @@ err:
     return -1;
 }
 
-int leave_multi_group(int sock, char* multi_ipv6, char* multi_ipv4)
+int leave_multi_group(socket_handle_t handle)
 {
     struct ip6_addr if_ipaddr = { 0 };
     struct ip6_mreq v6imreq = { 0 };
     int err = 0;
+    int sock = handle->fd;
 
-        // Configure source interface
-#if USE_DEFAULT_IF
-    v6imreq.imr_interface.s_addr = IPADDR_ANY;
-#else
-    err = tcpip_adapter_get_ip6_linklocal(TCPIP_ADAPTER_IF_STA, &if_ipaddr);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get IPV6 LL address. Error 0x%x", err);
-        goto err;
+    // Configure source interface
+    if (handle->mcast_cfg.default_if) {
+        v6imreq.imr_interface.s_addr = IPADDR_ANY;
+    } else {
+        err = tcpip_adapter_get_ip6_linklocal(TCPIP_ADAPTER_IF_STA, &if_ipaddr);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get IPV6 LL address. Error 0x%x", err);
+            goto err;
+        }
+        inet6_addr_from_ip6addr(&v6imreq.ipv6mr_interface, &if_ipaddr);
     }
-    inet6_addr_from_ip6addr(&v6imreq.ipv6mr_interface, &if_ipaddr);
-#endif
 
     // Configure multicast address to listen to
-    err = inet6_aton(multi_ipv6, &v6imreq.ipv6mr_multiaddr);
+    err = inet6_aton(handle->mcast_cfg.multicast_address, &v6imreq.ipv6mr_multiaddr);
     if (err != 1) {
-        ESP_LOGE(TAG, "Configured IPV6 multicast address '%s' is invalid.", multi_ipv6);
+        ESP_LOGE(TAG, "Configured IPV6 multicast address '%s' is invalid.", handle->mcast_cfg.multicast_address);
         goto err;
     }
     ESP_LOGI(TAG, "Configured IPV6 Multicast address %s", inet6_ntoa(v6imreq.ipv6mr_multiaddr));
     ip6_addr_t multi_addr;
     inet6_addr_to_ip6addr(&multi_addr, &v6imreq.ipv6mr_multiaddr);
     if (!ip6_addr_ismulticast(&multi_addr)) {
-        ESP_LOGW(TAG, "Configured IPV6 multicast address '%s' is not a valid multicast address. This will probably not work.", multi_ipv6);
+        ESP_LOGW(TAG, "Configured IPV6 multicast address '%s' is not a valid multicast address. This will probably not work.", handle->mcast_cfg.multicast_address);
     }
 
     err = setsockopt(sock, IPPROTO_IPV6, IPV6_DROP_MEMBERSHIP,
@@ -250,7 +254,7 @@ int leave_multi_group(int sock, char* multi_ipv6, char* multi_ipv4)
 
 #if CONFIG_SOCKET_IPV4_V6
     // Add the common IPV4 config options
-    err = leave_multi_group(sock, multi_ipv4);
+    err = leave_multi_group(sock, handle->mcast_cfg.multicast_address);
     if (err < 0) {
         goto err;
     }
@@ -265,32 +269,32 @@ err:
 #else
 /* Add a socket, either IPV4-only or IPV6 dual mode, to the IPV4
    multicast group */
-int socket_add_ipv4_multicast_group(int sock, char* multi_ipv4, bool assign_source_if)
+int socket_add_ipv4_multicast_group(int sock, uint8_t dif, char* multiaddr, bool assign_source_if)
 {
     struct ip_mreq imreq = { 0 };
     struct in_addr iaddr = { 0 };
     int err = 0;
     // Configure source interface
-#if USE_DEFAULT_IF
-    imreq.imr_interface.s_addr = IPADDR_ANY;
-#else
-    tcpip_adapter_ip_info_t ip_info = { 0 };
-    err = tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get IP address info. Error 0x%x", err);
-        goto err;
+    if (dif) {
+        imreq.imr_interface.s_addr = IPADDR_ANY;
+    } else {
+        tcpip_adapter_ip_info_t ip_info = { 0 };
+        err = tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get IP address info. Error 0x%x", err);
+            goto err;
+        }
+        inet_addr_from_ip4addr(&iaddr, &ip_info.ip);
     }
-    inet_addr_from_ip4addr(&iaddr, &ip_info.ip);
-#endif
     // Configure multicast address to listen to
-    err = inet_aton(multi_ipv4, &imreq.imr_multiaddr.s_addr);
+    err = inet_aton(multiaddr, &imreq.imr_multiaddr.s_addr);
     if (err != 1) {
-        ESP_LOGE(TAG, "Configured IPV4 multicast address '%s' is invalid.", multi_ipv4);
+        ESP_LOGE(TAG, "Configured IPV4 multicast address '%s' is invalid.", multiaddr);
         goto err;
     }
     ESP_LOGI(TAG, "Configured IPV4 Multicast address %s", inet_ntoa(imreq.imr_multiaddr.s_addr));
     if (!IP_MULTICAST(ntohl(imreq.imr_multiaddr.s_addr))) {
-        ESP_LOGW(TAG, "Configured IPV4 multicast address '%s' is not a valid multicast address. This will probably not work.", multi_ipv4);
+        ESP_LOGW(TAG, "Configured IPV4 multicast address '%s' is not a valid multicast address. This will probably not work.", multiaddr);
     }
 
     if (assign_source_if) {
@@ -346,33 +350,34 @@ err:
     return -1;
 }
 
-int join_multi_group(int sock, char* multi_ipv4)
+int join_multi_group(socket_handle_t handle)
 {
     int err = 0;
+    int sock = handle->fd;
 
     // Assign multicast TTL (set separately from normal interface TTL)
-    uint8_t ttl = MULTICAST_TTL;
+    uint8_t ttl = handle->mcast_cfg.ttl;
     setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(uint8_t));
     if (err < 0) {
         ESP_LOGE(TAG, "Failed to set IP_MULTICAST_TTL. Error %d", errno);
         goto err;
     }
 
-#if MULTICAST_LOOPBACK
-    // select whether multicast traffic should be received by this device, too
-    // (if setsockopt() is not called, the default is no)
-    uint8_t loopback_val = MULTICAST_LOOPBACK;
-    err = setsockopt(sock, IPPROTO_IP, IP_MULTICAST_LOOP,
-                     &loopback_val, sizeof(uint8_t));
-    if (err < 0) {
-        ESP_LOGE(TAG, "Failed to set IP_MULTICAST_LOOP. Error %d", errno);
-        goto err;
+    if (handle->mcast_cfg.loopback) {
+        // select whether multicast traffic should be received by this device, too
+        // (if setsockopt() is not called, the default is no)
+        uint8_t loopback_val = handle->mcast_cfg.loopback;
+        err = setsockopt(sock, IPPROTO_IP, IP_MULTICAST_LOOP,
+                        &loopback_val, sizeof(uint8_t));
+        if (err < 0) {
+            ESP_LOGE(TAG, "Failed to set IP_MULTICAST_LOOP. Error %d", errno);
+            goto err;
+        }
     }
-#endif
 
     // this is also a listening socket, so add it to the multicast
     // group for listening...
-    err = socket_add_ipv4_multicast_group(sock, multi_ipv4, true);
+    err = socket_add_ipv4_multicast_group(sock, handle->mcast_cfg.default_if, handle->mcast_cfg.multicast_address, true);
     if (err < 0) {
         goto err;
     }
@@ -385,31 +390,32 @@ err:
     return -1;
 }
 
-int leave_multi_group(int sock, char* multi_ipv4)
+int leave_multi_group(socket_handle_t handle)
 {
     struct ip_mreq imreq = { 0 };
     int err = 0;
+    int sock = handle->fd;
     // Configure source interface
-#if USE_DEFAULT_IF
-    imreq.imr_interface.s_addr = IPADDR_ANY;
-#else
-    tcpip_adapter_ip_info_t ip_info = { 0 };
-    err = tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get IP address info. Error 0x%x", err);
-        goto err;
+    if (handle->mcast_cfg.default_if) {
+        imreq.imr_interface.s_addr = IPADDR_ANY;
+    } else {
+        tcpip_adapter_ip_info_t ip_info = { 0 };
+        err = tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get IP address info. Error 0x%x", err);
+            goto err;
+        }
+        imreq.imr_interface.s_addr = &ip_info.ip;
     }
-    imreq.imr_interface.s_addr = &ip_info.ip;
-#endif
     // Configure multicast address to listen to
-    err = inet_aton(multi_ipv4, &imreq.imr_multiaddr.s_addr);
+    err = inet_aton(handle->mcast_cfg.multicast_address, &imreq.imr_multiaddr.s_addr);
     if (err != 1) {
-        ESP_LOGE(TAG, "Configured IPV4 multicast address '%s' is invalid.", multi_ipv4);
+        ESP_LOGE(TAG, "Configured IPV4 multicast address '%s' is invalid.", handle->mcast_cfg.multicast_address);
         goto err;
     }
     ESP_LOGI(TAG, "Configured IPV4 Multicast address %s", inet_ntoa(imreq.imr_multiaddr.s_addr));
     if (!IP_MULTICAST(ntohl(imreq.imr_multiaddr.s_addr))) {
-        ESP_LOGW(TAG, "Configured IPV4 multicast address '%s' is not a valid multicast address. This will probably not work.", multi_ipv4);
+        ESP_LOGW(TAG, "Configured IPV4 multicast address '%s' is not a valid multicast address. This will probably not work.", handle->mcast_cfg.multicast_address);
     }
 
     err = setsockopt(sock, IPPROTO_IP, IP_DROP_MEMBERSHIP,
@@ -426,7 +432,7 @@ int leave_multi_group(int sock, char* multi_ipv4)
 
 #endif
 
-int socket_init(socket_handle_t* handle, struct socket_config_t const* config)
+int socket_init(socket_handle_t* handle, struct socket_config_t const* config, struct socket_multicast_t const* mcast_cfg)
 {
     int ret = 0;
 
@@ -444,6 +450,7 @@ int socket_init(socket_handle_t* handle, struct socket_config_t const* config)
     }
 
     (*handle)->config = *config;
+    (*handle)->mcast_cfg = *mcast_cfg;
 
     ret = socket_open(*handle);
     if (ret != 0)
@@ -506,12 +513,7 @@ int socket_open(socket_handle_t handle)
         }
     }
 
-#ifdef CONFIG_SOCKET_IPV6
-        handle->fd = create_socket(handle->config.direction == SOCKET_IN, handle->config.port);
-#else
-        handle->fd = create_socket(handle->config.direction == SOCKET_IN, handle->config.port);
-#endif
-
+    handle->fd = create_socket(handle->config.direction == SOCKET_IN, handle->config.port);
     if (handle->fd < 0)
     {
         ESP_LOGE(TAG, "%s: unable to create socket", __func__);
@@ -520,14 +522,13 @@ int socket_open(socket_handle_t handle)
         return ret;
     }
 
-
-
     if (socket_is_multi_address(handle->config.ip_address) == 0) {
-#ifdef CONFIG_SOCKET_IPV6
-        ret = join_multi_group(handle->fd, handle->config.ip_address, NULL);
-#else
-        ret = join_multi_group(handle->fd, handle->config.ip_address);
-#endif
+        //save the multi_address into config.
+        strncpy(handle->mcast_cfg.multicast_address, handle->config.ip_address, strlen(handle->config.ip_address));
+        // handle->mcast_cfg.default_if = 1;
+        // handle->mcast_cfg.loopback = 0;
+        // handle->mcast_cfg.ttl = 1;
+        ret = join_multi_group(handle);
         if (ret < 0) {
             ESP_LOGE(TAG, "%s: unable to join group %s", __func__, handle->config.ip_address);
             socket_close(handle);
@@ -594,7 +595,7 @@ int socket_read(socket_handle_t handle, char* buffer, size_t size)
         return -ENODEV;
     }
 
-again:
+// again:
     ret = recvfrom(handle->fd, buffer, size, 0, (struct sockaddr *)&raddr, &socklen);
     if (ret < 0)
     {
@@ -617,13 +618,13 @@ again:
                     raddr_name, sizeof(raddr_name)-1);
     }
 #endif
-    // ESP_LOGI(TAG, "received %d bytes from %s:", ret, raddr_name);
+    ESP_LOGD(TAG, "received %d bytes from %s:", ret, raddr_name);
 
-    if (strncmp(handle->config.ip_address, raddr_name, SOCKET_IP_ADDRESS_SIZE))
-    {
-        ESP_LOGD(TAG, "%s: packet received from wrong ip", __func__);
-        goto again;
-    }
+    // if (strncmp(handle->config.ip_address, raddr_name, SOCKET_IP_ADDRESS_SIZE))
+    // {
+    //     ESP_LOGD(TAG, "%s: packet received from wrong ip", __func__);
+    //     goto again;
+    // }
 
     return ret;
 }

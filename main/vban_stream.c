@@ -50,6 +50,13 @@
 
 static const char *TAG = "VBAN_STREAM";
 
+#define APP_STREAM_NAME             CONFIG_APP_STREAM_NAME
+
+#define SOCKET_MULTICAST_DEFAULT_IF CONFIG_SOCKET_MULTICAST_DEFAULT_IF
+#define SOCKET_MULTICAST_LOOPBACK   CONFIG_SOCKET_MULTICAST_LOOPBACK
+#define SOCKET_MULTICAST_TTL        CONFIG_SOCKET_MULTICAST_TTL
+#define SOCKET_MULTICAST_ADDR       CONFIG_SOCKET_MULTICAST_ADDR
+
 struct stream_info_t
 {
     VBanCodec               codec;
@@ -63,6 +70,7 @@ typedef struct vban_stream {
     socket_handle_t             socket;
     char                        buffer[VBAN_PROTOCOL_MAX_SIZE];
     struct socket_config_t      socket_cfg;
+    struct socket_multicast_t   mcast_cfg;
     char                        stream_name[VBAN_STREAM_NAME_SIZE];
     bool                        is_init;
     struct stream_info_t        stream_info;
@@ -165,8 +173,14 @@ static esp_err_t _vban_open(audio_element_handle_t self)
     strncpy(vban->socket_cfg.ip_address, addr, SOCKET_IP_ADDRESS_SIZE-1);
     vban->socket_cfg.port = (int)port_num;
     vban->socket_cfg.direction = vban->type == AUDIO_STREAM_READER ? SOCKET_IN : SOCKET_OUT;
-    strncpy(vban->stream_name, "esp32", VBAN_STREAM_NAME_SIZE-1);
-    int ret = socket_init(&(vban->socket), &(vban->socket_cfg));
+
+    vban->mcast_cfg.default_if = SOCKET_MULTICAST_DEFAULT_IF;
+    vban->mcast_cfg.loopback = SOCKET_MULTICAST_LOOPBACK;
+    vban->mcast_cfg.ttl = SOCKET_MULTICAST_TTL;
+    strncpy(vban->mcast_cfg.multicast_address, SOCKET_MULTICAST_ADDR, SOCKET_IP_ADDRESS_SIZE-1);
+
+    strncpy(vban->stream_name, APP_STREAM_NAME, VBAN_STREAM_NAME_SIZE-1);
+    int ret = socket_init(&(vban->socket), &(vban->socket_cfg), &(vban->mcast_cfg));
     if (ret != 0) {
         ESP_LOGE(TAG, "Failed to open vban socket");
         return ESP_FAIL;

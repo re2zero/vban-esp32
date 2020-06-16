@@ -53,7 +53,6 @@ struct socket_config_t
     enum socket_direction   direction;
     char                    ip_address[SOCKET_IP_ADDRESS_SIZE];
     short                   port;
-    struct socket_multicast_t mc_cfg;
 };
 
 /**
@@ -68,7 +67,7 @@ typedef struct socket_t* socket_handle_t;
  * @param config configuration structure
  * @return 0 upon success, negative value otherwise
  */
-int socket_init(socket_handle_t* handle, struct socket_config_t const* config);
+int socket_init(socket_handle_t* handle, struct socket_config_t const* config, struct socket_multicast_t const* mcast_cfg);
 
 /**
  * Release the socket

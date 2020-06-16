@@ -49,7 +49,7 @@
 #define EXAMPLE_WIFI_SSID CONFIG_WIFI_SSID
 #define EXAMPLE_WIFI_PASS CONFIG_WIFI_PASSWORD
 
-#define PORT CONFIG_EXAMPLE_PORT
+#define PORT CONFIG_SOCKET_PORT
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -164,7 +164,7 @@ void app_main()
 
     ESP_LOGI(TAG, "[3.3] Set up  uri (and default output is i2s)");
     // audio_element_set_uri(vban_stream_reader, "0.0.0.0:6980");
-    audio_element_set_uri(vban_stream_reader, "192.168.20.126:6980");
+    audio_element_set_uri(vban_stream_reader, "239.0.1.5:6980");
 
     ESP_LOGI(TAG, "[ 4 ] Initialize peripherals");
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
