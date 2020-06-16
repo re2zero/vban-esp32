@@ -82,7 +82,7 @@ int socket_release(socket_handle_t* handle);
  * @param multiaddr multicast ip address
  * @return 0 upon success, negative value otherwise
  */
-int socket_join_group(socket_handle_t* handle, const char* multiaddr);
+int socket_join_group(socket_handle_t handle, const char* multiaddr);
 
 /**
  * Leave a multicast group
@@ -90,7 +90,7 @@ int socket_join_group(socket_handle_t* handle, const char* multiaddr);
  * @param multiaddr multicast ip address
  * @return 0 upon success, negative value otherwise
  */
-int socket_leave_group(socket_handle_t* handle, const char* multiaddr);
+int socket_leave_group(socket_handle_t handle, const char* multiaddr);
 
 /**
  * Read data from the socket
