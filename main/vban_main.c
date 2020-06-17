@@ -38,8 +38,9 @@
 
 #include "vban.h"
 #include "packet.h"
-
 #include "vban_stream.h"
+
+#include "manager.h"
 
 /* The examples use simple WiFi configuration that you can set via
    'make menuconfig'.
@@ -130,6 +131,10 @@ void app_main()
     // esp_log_level_set("VBAN_STREAM", ESP_LOG_WARN);
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
+#if 1
+    tcpip_adapter_init();
+    manager_start_service();
+#else
     audio_pipeline_handle_t pipeline;
     audio_element_handle_t vban_stream_reader, i2s_stream_writer;
 
@@ -283,4 +288,5 @@ void app_main()
     audio_element_deinit(vban_stream_reader);
     audio_element_deinit(i2s_stream_writer);
     esp_periph_set_destroy(set);
+#endif
 }

@@ -72,6 +72,10 @@ typedef struct {
  */
 audio_element_handle_t vban_stream_init(vban_stream_cfg_t *config);
 
+esp_err_t vban_stream_join_group(audio_element_handle_t self, const char* multi_ip);
+
+esp_err_t vban_stream_leave_group(audio_element_handle_t self, const char* multi_ip);
+
 #ifdef __cplusplus
 }
 #endif

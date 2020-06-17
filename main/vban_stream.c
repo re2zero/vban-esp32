@@ -198,7 +198,6 @@ static int _vban_read(audio_element_handle_t self, char *buffer, int len, TickTy
     ESP_LOGD(TAG, "read len=%d, pos=%d/%d", len, (int)info.byte_pos, (int)info.total_bytes);
 
     int payload_size = 0;
-    struct stream_config_t stream_config;
     int size = socket_read(vban->socket, vban->buffer, VBAN_PROTOCOL_MAX_SIZE);
     if (size < 0) {
         ESP_LOGE(TAG, "socket_read failed: errno %d", errno);
@@ -233,6 +232,7 @@ static int _vban_read(audio_element_handle_t self, char *buffer, int len, TickTy
         memcpy(buffer, PACKET_PAYLOAD_PTR(vban->buffer), payload_size);
     }
     // if (packet_check(vban->stream_name, vban->buffer, size) == 0) {
+    //     struct stream_config_t stream_config;
     //     packet_get_stream_config(vban->buffer, &stream_config);
 
     //     info.byte_pos += payload_size;
@@ -364,4 +364,27 @@ audio_element_handle_t vban_stream_init(vban_stream_cfg_t *config)
 _vban_init_exit:
     audio_free(vban);
     return NULL;
+}
+
+esp_err_t vban_stream_join_group(audio_element_handle_t self, const char* multi_ip)
+{
+    vban_stream_t *vban = (vban_stream_t *)audio_element_getdata(self);
+
+    int ret = socket_join_group(vban->socket, multi_ip);
+    if (ret < 0) {
+        ESP_LOGE(TAG, "join group failed: %d", ret);
+    }
+    return ESP_OK;
+}
+
+esp_err_t vban_stream_leave_group(audio_element_handle_t self, const char* multi_ip)
+{
+    vban_stream_t *vban = (vban_stream_t *)audio_element_getdata(self);
+
+    int ret = socket_leave_group(vban->socket, multi_ip);
+    if (ret < 0) {
+        ESP_LOGE(TAG, "leave group failed: %d", ret);
+    }
+
+    return ESP_OK;
 }
