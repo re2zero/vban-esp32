@@ -170,16 +170,25 @@ static esp_err_t _vban_open(audio_element_handle_t self)
 
     ESP_LOGI(TAG, "_vban_open, ip:%s, port=%d", addr, (int)port_num);
 
+    strncpy(vban->stream_name, APP_STREAM_NAME, VBAN_STREAM_NAME_SIZE-1);
     strncpy(vban->socket_cfg.ip_address, addr, SOCKET_IP_ADDRESS_SIZE-1);
     vban->socket_cfg.port = (int)port_num;
     vban->socket_cfg.direction = vban->type == AUDIO_STREAM_READER ? SOCKET_IN : SOCKET_OUT;
+    if (vban->type == AUDIO_STREAM_WRITER) {
+        struct stream_config_t stream_config;
+        stream_config.sample_rate = info.sample_rates;
+        stream_config.nb_channels = info.channels;
+        stream_config.bit_fmt = stream_parse_int_fmt(info.bits);
+        ESP_LOGI(TAG, "open %s rate:%d, channel:%d, bits:%d", vban->stream_name, info.sample_rates, info.channels, info.bits);
+
+        packet_init_header(vban->buffer, &stream_config, vban->stream_name);
+    }
 
     vban->mcast_cfg.default_if = SOCKET_MULTICAST_DEFAULT_IF;
     vban->mcast_cfg.loopback = SOCKET_MULTICAST_LOOPBACK;
     vban->mcast_cfg.ttl = SOCKET_MULTICAST_TTL;
     strncpy(vban->mcast_cfg.multicast_address, SOCKET_MULTICAST_ADDR, SOCKET_IP_ADDRESS_SIZE-1);
 
-    strncpy(vban->stream_name, APP_STREAM_NAME, VBAN_STREAM_NAME_SIZE-1);
     int ret = socket_init(&(vban->socket), &(vban->socket_cfg), &(vban->mcast_cfg));
     if (ret != 0) {
         ESP_LOGE(TAG, "Failed to open vban socket");
@@ -240,10 +249,10 @@ static int _vban_read(audio_element_handle_t self, char *buffer, int len, TickTy
     //     info.channels = stream_config.nb_channels;
     //     info.bits = stream_int_bit_fmt(stream_config.bit_fmt);
     //     audio_element_setinfo(self, &info);
-    //     if (!vban->info_report) {
-    //         audio_element_report_info(self);
-    //         vban->info_report = true;
-    //     }
+    //     // if (!vban->info_report) {
+    //     //     audio_element_report_info(self);
+    //     //     vban->info_report = true;
+    //     // }
 
     //     //copy the received data to i2s buffer
     //     payload_size = PACKET_PAYLOAD_SIZE(size);
@@ -258,46 +267,35 @@ static int _vban_write(audio_element_handle_t self, char *buffer, int len, TickT
     audio_element_info_t info;
     audio_element_getinfo(self, &info);
 
-    struct stream_config_t stream_config;
-    stream_config.sample_rate = info.sample_rates;
-    stream_config.nb_channels = info.channels;
-    stream_config.bit_fmt = info.bits;
-
-    packet_init_header(vban->buffer, &stream_config, vban->stream_name);
-    int max_size = packet_get_max_payload_size(vban->buffer);
-    if (len > max_size) {
-        len = max_size;
-    }
-
     memcpy(PACKET_PAYLOAD_PTR(vban->buffer), buffer, len);
     packet_set_new_content(vban->buffer, len);
+
     int packet_size = len + sizeof(struct VBanHeader);
-    int wlen = 0;
     if (packet_check(vban->stream_name, vban->buffer, packet_size) == 0) {
-        wlen = socket_write(vban->socket, vban->buffer, packet_size);
-        if (wlen < 0) {
-            ESP_LOGE(TAG, "socket_write failed: errno %d", errno);
-        }
+        // Just send buffer to UDP, nomatter what it's OK or not.
+        socket_write(vban->socket, vban->buffer, packet_size);
     }
 
-    ESP_LOGD(TAG, "write,%d, errno:%d,pos:%d", wlen, errno, (int)info.byte_pos);
-    if (wlen > 0) {
-        info.byte_pos += wlen;
-        audio_element_setinfo(self, &info);
-    }
-    return wlen;
+    info.byte_pos += len;
+    audio_element_setinfo(self, &info);
+    return len;
 }
 
 static int _vban_process(audio_element_handle_t self, char *in_buffer, int in_len)
 {
-    int r_size = audio_element_input(self, in_buffer, in_len);
+    ESP_LOGD(TAG, "_vban_process, %d", in_len);
+    int bytes_one = audio_element_input(self, in_buffer, in_len);
+    int bytes_two = audio_element_multi_input(self, in_buffer, in_len, 0, 0);
+
     int w_size = 0;
-    if (r_size > 0) {
+    if (bytes_one > 0 || bytes_two > 0) {
+        int r_size = bytes_one > bytes_two ? bytes_one : bytes_two;
         w_size = audio_element_output(self, in_buffer, r_size);
         audio_element_multi_output(self, in_buffer, r_size, 0);
     } else {
-        w_size = r_size;
+        w_size = bytes_one > bytes_two ? bytes_two : bytes_one;
     }
+
     return w_size;
 }
 
@@ -330,7 +328,7 @@ audio_element_handle_t vban_stream_init(vban_stream_cfg_t *config)
 {
     audio_element_handle_t el;
     vban_stream_t *vban = audio_calloc(1, sizeof(vban_stream_t));
-
+    // mem_assert(vban);
     AUDIO_MEM_CHECK(TAG, vban, return NULL);
 
     audio_element_cfg_t cfg = DEFAULT_AUDIO_ELEMENT_CONFIG();

@@ -46,6 +46,17 @@ VBanBitResolution stream_parse_bit_fmt(char const* argv)
     return index;
 }
 
+VBanBitResolution stream_parse_int_fmt(unsigned int bits)
+{
+    size_t index = 0;
+    while ((index < VBAN_BIT_RESOLUTION_MAX) && (bits > bit_fmt_int[index]))
+    {
+        ++index;
+    }
+
+    return index;
+}
+
 char const* stream_print_bit_fmt(VBanBitResolution bit_fmt)
 {
     return (bit_fmt < VBAN_BIT_RESOLUTION_MAX) ? bit_fmt_names[bit_fmt] : "Invalid";

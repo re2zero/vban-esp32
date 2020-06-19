@@ -36,6 +36,7 @@ struct stream_config_t
  * Helper function to parse command line parameter.
  */
 VBanBitResolution stream_parse_bit_fmt(char const* argv);
+VBanBitResolution stream_parse_int_fmt(unsigned int bits);
 char const* stream_print_bit_fmt(VBanBitResolution bit_fmt);
 unsigned int stream_int_bit_fmt(VBanBitResolution bit_fmt);
 

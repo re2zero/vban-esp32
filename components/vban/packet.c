@@ -33,6 +33,9 @@ int packet_check(char const* streamname, char const* buffer, size_t size)
     VBanProtocol protocol = VBAN_PROTOCOL_UNDEFINED_4;
     VBanCodec codec = VBAN_BIT_RESOLUTION_MAX;
 
+    ESP_LOGD(TAG, "%s: packet is vban: %u, sr: %d, nbs: %d, nbc: %d, bit: %d, name: %s, nu: %u",
+        __func__, hdr->vban, hdr->format_SR, hdr->format_nbs, hdr->format_nbc, hdr->format_bit, hdr->streamname, hdr->nuFrame);
+
     if ((streamname == 0) || (buffer == 0))
     {
         ESP_LOGE(TAG, "%s: null pointer argument", __func__);
@@ -79,6 +82,7 @@ int packet_check(char const* streamname, char const* buffer, size_t size)
         case VBAN_PROTOCOL_UNDEFINED_2:
         case VBAN_PROTOCOL_UNDEFINED_3:
         case VBAN_PROTOCOL_UNDEFINED_4:
+            ESP_LOGE(TAG, "%s: packet with not supported protocol", __func__);
             /** not supported yet */
             return -EINVAL;
 
@@ -102,8 +106,8 @@ static int packet_pcm_check(char const* buffer, size_t size)
     size_t sample_size      = 0;
     size_t payload_size     = 0;
 
-    ESP_LOGD(TAG, "%s: packet is vban: %u, sr: %d, nbs: %d, nbc: %d, bit: %d, name: %s, nu: %u",
-        __func__, hdr->vban, hdr->format_SR, hdr->format_nbs, hdr->format_nbc, hdr->format_bit, hdr->streamname, hdr->nuFrame);
+    // ESP_LOGI(TAG, "%s: packet is vban: %u, sr: %d, nbs: %d, nbc: %d, bit: %d, name: %s, nu: %u",
+    //     __func__, hdr->vban, hdr->format_SR, hdr->format_nbs, hdr->format_nbc, hdr->format_bit, hdr->streamname, hdr->nuFrame);
 
     if (bit_resolution >= VBAN_BIT_RESOLUTION_MAX)
     {

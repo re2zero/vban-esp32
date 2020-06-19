@@ -582,7 +582,6 @@ int socket_join_group(socket_handle_t handle, const char* multiaddr)
     int ret = join_multi_group(handle->fd, handle->mcast_cfg.default_if, handle->mcast_cfg.ttl, handle->mcast_cfg.loopback, multiaddr);
     if (ret >= 0) {
         //save the new multicast group.
-        // handle->mcast_cfg.multicast_address = multiaddr;
         strncpy(handle->mcast_cfg.multicast_address, multiaddr, strlen(multiaddr));
     }
     return ret;
@@ -684,7 +683,6 @@ int socket_write(socket_handle_t handle, char const* buffer, size_t size)
         return -ENODEV;
     }
 #if 1
-    char addrbuf[SOCKET_IP_ADDRESS_SIZE] = { 0 };
     struct addrinfo hints = {
         .ai_flags = AI_PASSIVE,
         .ai_socktype = SOCK_DGRAM,
@@ -706,22 +704,25 @@ int socket_write(socket_handle_t handle, char const* buffer, size_t size)
         return err;
     }
 
-
+    char addrbuf[SOCKET_IP_ADDRESS_SIZE] = { 0 };
 #ifdef CONFIG_SOCKET_IPV6
     struct sockaddr_in6 *s6addr = (struct sockaddr_in6 *)res->ai_addr;
     s6addr->sin6_port = htons(handle->config.port);
     inet6_ntoa_r(s6addr->sin6_addr, addrbuf, sizeof(addrbuf)-1);
-    ESP_LOGI(TAG, "Sending to IPV6 multicast address %s port %d...",  addrbuf, s6addr->sin6_port);
+    ESP_LOGD(TAG, "Sending to IPV6 multicast address %s port %d...",  addrbuf, s6addr->sin6_port);
 #else // Send an IPv4 multicast packet
     ((struct sockaddr_in *)res->ai_addr)->sin_port = htons(handle->config.port);
     inet_ntoa_r(((struct sockaddr_in *)res->ai_addr)->sin_addr, addrbuf, sizeof(addrbuf)-1);
-    ESP_LOGI(TAG, "Sending to IPV4 multicast address %s:%d...",  addrbuf, ((struct sockaddr_in *)res->ai_addr)->sin_port);
+    ESP_LOGD(TAG, "Sending to IPV4 multicast address %s:%d...",  addrbuf, ((struct sockaddr_in *)res->ai_addr)->sin_port);
 #endif
+
     ret = sendto(handle->fd, buffer, size, 0, res->ai_addr, res->ai_addrlen);
     freeaddrinfo(res);
     if (ret < 0) {
-        ESP_LOGE(TAG, "IPV4 or IPV6 sendto failed. errno: %d", errno);
-        return ret;
+        if (errno != EINTR)
+        {
+            ESP_LOGD(TAG, "IPV4 or IPV6 sendto failed. errno: %d -> %s", errno, strerror(errno));
+        }
     }
 
 #else //1
